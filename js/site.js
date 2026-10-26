@@ -56,50 +56,98 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     track.addEventListener('scroll', updateArrows, { passive: true });
     window.addEventListener('resize', updateArrows);
-    updateArrows();
+    // Adia a primeira leitura de layout pro próximo frame, em vez de ler
+    // scrollWidth/clientWidth em sequência com o resto do script (o que
+    // força um reflow síncrono logo no carregamento da página).
+    requestAnimationFrame(updateArrows);
   })();
 
-  // Countdown — Hours : Minutes : Seconds (evergreen rolling cycle)
+  // Depoimentos — carrossel automático (só ativo no modo mobile, quando o
+  // mural vira scroll horizontal via CSS). Pausa ao tocar/arrastar e
+  // retoma sozinho depois de um tempo parado; some se a aba não está
+  // visível ou a seção está fora da tela; respeita prefers-reduced-motion.
   (function () {
-    var el = document.getElementById('megaCountdown');
-    if (!el) return;
-    var nums = {
-      hours: el.querySelector('[data-cd="hours"]'),
-      minutes: el.querySelector('[data-cd="minutes"]'),
-      seconds: el.querySelector('[data-cd="seconds"]'),
-    };
-    // First visit starts the clock, persisted in localStorage so refreshes
-    // don't reset it. When it hits 0, it resets to a fresh cycle.
-    var STORAGE_KEY = 'pa_countdown_target';
-    var CYCLE_MS = 15 * 60 * 60 * 1000; // 15 hours
+    var track = document.querySelector('.testimonials-grid');
+    if (!track) return;
 
-    function getTarget() {
-      var t = parseInt(localStorage.getItem(STORAGE_KEY) || '0', 10);
-      var now = Date.now();
-      if (!t || t <= now) {
-        t = now + CYCLE_MS;
-        try { localStorage.setItem(STORAGE_KEY, t); } catch (e) {}
-      }
-      return t;
+    var AUTO_MS = 3200;
+    var RESUME_DELAY_MS = 5000;
+    var timer = null;
+    var resumeTimer = null;
+    var userPaused = false;
+    var inView = false;
+    var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    function isCarouselMode() {
+      return track.scrollWidth > track.clientWidth + 4;
     }
-    var target = getTarget();
-
-    function pad(n) { return n < 10 ? '0' + n : '' + n; }
-
+    function stepWidth() {
+      var card = track.querySelector('.testimonial-shot');
+      if (!card) return track.clientWidth;
+      var gap = parseFloat(getComputedStyle(track).gap) || 14;
+      return card.getBoundingClientRect().width + gap;
+    }
     function tick() {
-      var diff = target - Date.now();
-      if (diff <= 0) {
-        target = Date.now() + CYCLE_MS;
-        try { localStorage.setItem(STORAGE_KEY, target); } catch (e) {}
-        return;
+      if (reduceMotion || userPaused || !inView || !isCarouselMode()) return;
+      var atEnd = track.scrollLeft + track.clientWidth >= track.scrollWidth - 4;
+      if (atEnd) {
+        track.scrollTo({ left: 0, behavior: 'smooth' });
+      } else {
+        track.scrollBy({ left: stepWidth(), behavior: 'smooth' });
       }
-      var s = Math.floor(diff / 1000);
-      if (nums.hours) nums.hours.textContent = pad(Math.floor(s / 3600));
-      if (nums.minutes) nums.minutes.textContent = pad(Math.floor((s % 3600) / 60));
-      if (nums.seconds) nums.seconds.textContent = pad(s % 60);
     }
-    tick();
-    setInterval(tick, 1000);
+    function start() {
+      stop();
+      if (reduceMotion) return;
+      timer = setInterval(tick, AUTO_MS);
+    }
+    function stop() {
+      if (timer) clearInterval(timer);
+      timer = null;
+    }
+    function pauseForInteraction() {
+      userPaused = true;
+      if (resumeTimer) clearTimeout(resumeTimer);
+      resumeTimer = setTimeout(function () { userPaused = false; }, RESUME_DELAY_MS);
+    }
+
+    ['touchstart', 'pointerdown', 'wheel'].forEach(function (evt) {
+      track.addEventListener(evt, pauseForInteraction, { passive: true });
+    });
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) stop(); else start();
+    });
+
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) { inView = e.isIntersecting; });
+    }, { threshold: 0.4 });
+    io.observe(track);
+
+    start();
+  })();
+
+  // Vídeo do hero — carregamento adiado. O vídeo de 1,4MB competia por
+  // banda com CSS/fontes/HTML logo na carga, inflando FCP/LCP (grave em
+  // 4G). Ele só começa a baixar depois que a página termina de carregar
+  // (window 'load'), usando o poster estático como conteúdo visível
+  // imediato até lá.
+  (function () {
+    var video = document.getElementById('heroVideo');
+    if (!video) return;
+    var source = video.querySelector('source[data-src]');
+    if (!source) return;
+
+    function loadVideo() {
+      source.src = source.getAttribute('data-src');
+      video.load();
+      video.play().catch(function () {}); // navegador pode bloquear até o 1º frame existir
+    }
+
+    if (document.readyState === 'complete') {
+      loadVideo();
+    } else {
+      window.addEventListener('load', loadVideo);
+    }
   })();
 
   // Reveal on scroll (IntersectionObserver)
